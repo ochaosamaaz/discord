@@ -12,11 +12,15 @@ module.exports = {
         await command.execute(interaction, client);
       } catch (error) {
         console.error(`Error executing ${interaction.commandName}:`, error);
-        const reply = { content: '❌ Terjadi error saat menjalankan command!', ephemeral: true };
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp(reply);
-        } else {
-          await interaction.reply(reply);
+        try {
+          const reply = { content: '❌ Terjadi error saat menjalankan command!', ephemeral: true };
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp(reply).catch(() => {});
+          } else {
+            await interaction.reply(reply).catch(() => {});
+          }
+        } catch (e) {
+          // Silently ignore if we can't respond
         }
       }
     }

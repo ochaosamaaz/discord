@@ -1,6 +1,8 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getQueue } = require('../../systems/music');
-const { execSync } = require('child_process');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -26,30 +28,35 @@ module.exports = {
 
       // Check if it's a URL or search query
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
-      let searchQuery = isUrl ? query : `ytsearch:${query}`;
+      const searchQuery = isUrl ? query : `ytsearch:${query}`;
 
-      // Use yt-dlp to get song info
-      const result = execSync(
-        `yt-dlp --no-playlist --print "%(title)s|||%(webpage_url)s|||%(duration_string)s|||%(thumbnail)s" "${searchQuery}"`,
-        { encoding: 'utf-8', timeout: 15000 }
-      ).trim();
+      // Use yt-dlp to get song info (Windows compatible)
+      const cmd = `yt-dlp --no-playlist --print "%(title)s|||%(webpage_url)s|||%(duration_string)s|||%(thumbnail)s" "${searchQuery}"`;
+      
+      const { stdout } = await execAsync(cmd, { timeout: 20000 });
+      const result = stdout.trim();
+
+      if (!result) {
+        return await interaction.editReply('❌ Lagu tidak ditemukan!');
+      }
 
       const lines = result.split('\n');
-      for (const line of lines.slice(0, 1)) { // Only take first result
-        const [title, url, duration, thumbnail] = line.split('|||');
-        if (title && url) {
+      for (const line of lines.slice(0, 1)) {
+        const parts = line.split('|||');
+        if (parts.length >= 2) {
+          const [title, url, duration, thumbnail] = parts;
           songs.push({
-            title: title.trim(),
-            url: url.trim(),
-            duration: duration?.trim() || 'Unknown',
-            thumbnail: thumbnail?.trim() || null,
+            title: (title || 'Unknown').trim(),
+            url: (url || '').trim(),
+            duration: (duration || 'Unknown').trim(),
+            thumbnail: (thumbnail || '').trim() || null,
             requestedBy: interaction.user,
           });
         }
       }
 
-      if (songs.length === 0) {
-        return interaction.editReply('❌ Lagu tidak ditemukan!');
+      if (songs.length === 0 || !songs[0].url) {
+        return await interaction.editReply('❌ Lagu tidak ditemukan!');
       }
 
       // Connect if not connected
@@ -75,8 +82,12 @@ module.exports = {
 
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
-      console.error('Play command error:', error);
-      await interaction.editReply('❌ Gagal memutar lagu! Pastikan yt-dlp & ffmpeg sudah terinstall.');
+      console.error('Play command error:', error.message || error);
+      try {
+        await interaction.editReply('❌ Gagal memutar lagu! Pastikan yt-dlp & ffmpeg sudah terinstall.');
+      } catch (e) {
+        // Already responded
+      }
     }
   },
 };
