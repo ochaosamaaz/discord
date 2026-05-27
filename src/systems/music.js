@@ -82,7 +82,7 @@ class MusicQueue {
     try {
       // Use yt-dlp piped to ffmpeg via shell (most reliable on Windows)
       const url = this.current.url;
-      const cmd = `yt-dlp -f "bestaudio/best" --no-playlist -o - "${url}" | ffmpeg -i pipe:0 -analyzeduration 0 -loglevel 0 -f s16le -ar 48000 -ac 2 pipe:1`;
+      const cmd = `yt-dlp -f "bestaudio/best" --no-playlist --no-live-from-start -o - "${url}" | ffmpeg -i pipe:0 -analyzeduration 0 -loglevel 0 -f s16le -ar 48000 -ac 2 pipe:1`;
 
       const process = spawn(cmd, [], {
         shell: true,
@@ -91,13 +91,25 @@ class MusicQueue {
 
       this.currentProcess = process;
 
+      let hasError = false;
+
       process.on('error', (err) => {
         console.error('Stream process error:', err.message);
       });
 
       process.stderr.on('data', (data) => {
         const msg = data.toString();
-        if (msg.includes('ERROR')) console.error('Stream error:', msg);
+        if (msg.includes('ERROR') || msg.includes('not available')) {
+          console.error('Stream error:', msg);
+          if (!hasError) {
+            hasError = true;
+            if (this.textChannel) {
+              this.textChannel.send('❌ Video ini tidak bisa diputar (mungkin live stream/restricted). Skipping...').catch(() => {});
+            }
+            this.killProcess();
+            this.playNext();
+          }
+        }
       });
 
       const resource = createAudioResource(process.stdout, {

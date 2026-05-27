@@ -31,7 +31,7 @@ module.exports = {
       const searchQuery = isUrl ? query : `ytsearch:${query}`;
 
       // Use yt-dlp to get song info (Windows compatible)
-      const cmd = `yt-dlp --no-playlist --print "%(title)s|||%(webpage_url)s|||%(duration_string)s|||%(thumbnail)s" "${searchQuery}"`;
+      const cmd = `yt-dlp --no-playlist --no-live-from-start --match-filter "!is_live" --print "%(title)s|||%(webpage_url)s|||%(duration_string)s|||%(thumbnail)s" "${searchQuery}"`;
       
       const { stdout } = await execAsync(cmd, { timeout: 20000 });
       const result = stdout.trim();
