@@ -80,40 +80,27 @@ class MusicQueue {
     this.current = this.songs.shift();
 
     try {
-      // Step 1: Get direct audio URL from yt-dlp
-      const { stdout } = await execAsync(
-        `yt-dlp -f "bestaudio/best" --get-url --no-playlist "${this.current.url}"`,
-        { timeout: 15000 }
-      );
-      const audioUrl = stdout.trim();
+      // Use yt-dlp piped to ffmpeg via shell (most reliable on Windows)
+      const url = this.current.url;
+      const cmd = `yt-dlp -f "bestaudio/best" --no-playlist -o - "${url}" | ffmpeg -i pipe:0 -analyzeduration 0 -loglevel 0 -f s16le -ar 48000 -ac 2 pipe:1`;
 
-      if (!audioUrl) {
-        throw new Error('Could not get audio URL');
-      }
-
-      // Step 2: Use ffmpeg to stream directly from the URL
-      const ffmpeg = spawn('ffmpeg', [
-        '-reconnect', '1',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5',
-        '-i', audioUrl,
-        '-analyzeduration', '0',
-        '-loglevel', '0',
-        '-f', 's16le',
-        '-ar', '48000',
-        '-ac', '2',
-        'pipe:1',
-      ]);
-
-      this.currentProcess = ffmpeg;
-
-      ffmpeg.on('error', (err) => {
-        console.error('ffmpeg error:', err.message);
+      const process = spawn(cmd, [], {
+        shell: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
 
-      ffmpeg.stdin.on('error', () => {});
+      this.currentProcess = process;
 
-      const resource = createAudioResource(ffmpeg.stdout, {
+      process.on('error', (err) => {
+        console.error('Stream process error:', err.message);
+      });
+
+      process.stderr.on('data', (data) => {
+        const msg = data.toString();
+        if (msg.includes('ERROR')) console.error('Stream error:', msg);
+      });
+
+      const resource = createAudioResource(process.stdout, {
         inputType: StreamType.Raw,
       });
 
