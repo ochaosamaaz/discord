@@ -1,8 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, StreamType } = require('@discordjs/voice');
-const { spawn, exec } = require('child_process');
-const { promisify } = require('util');
-const execAsync = promisify(exec);
+const { spawn } = require('child_process');
 
 class MusicQueue {
   constructor(guildId) {
@@ -12,11 +10,11 @@ class MusicQueue {
     this.player = createAudioPlayer();
     this.connection = null;
     this.loop = false;
-    this.volume = 100;
     this.textChannel = null;
     this.currentProcess = null;
 
     this.player.on(AudioPlayerStatus.Idle, () => {
+      console.log('[Music] Player idle');
       if (this.loop && this.current) {
         this.songs.unshift(this.current);
       }
@@ -24,20 +22,37 @@ class MusicQueue {
     });
 
     this.player.on('error', (error) => {
-      console.error('Music player error:', error.message);
+      console.error('[Music] Player error:', error.message);
       this.playNext();
+    });
+
+    this.player.on(AudioPlayerStatus.Playing, () => {
+      console.log('[Music] Player is now PLAYING');
+    });
+
+    this.player.on(AudioPlayerStatus.Buffering, () => {
+      console.log('[Music] Player is BUFFERING...');
     });
   }
 
   async connect(voiceChannel, textChannel) {
     this.textChannel = textChannel;
+    
     this.connection = joinVoiceChannel({
       channelId: voiceChannel.id,
       guildId: this.guildId,
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false,
     });
+
+    // Wait for connection to be ready
+    try {
+      await entersState(this.connection, VoiceConnectionStatus.Ready, 10000);
+      console.log('[Music] Voice connection READY');
+    } catch (err) {
+      console.error('[Music] Voice connection failed:', err.message);
+      this.destroy();
+      throw new Error('Could not connect to voice channel');
+    }
 
     this.connection.subscribe(this.player);
 
@@ -80,8 +95,11 @@ class MusicQueue {
     this.current = this.songs.shift();
 
     try {
-      // Use yt-dlp piped to ffmpeg, output OGG/Opus (native Discord format - no encryption needed)
       const url = this.current.url;
+      console.log(`[Music] Playing: ${this.current.title}`);
+      console.log(`[Music] URL: ${url}`);
+
+      // yt-dlp output to stdout | ffmpeg encode to OGG Opus
       const cmd = `yt-dlp -f "bestaudio/best" --no-playlist --no-live-from-start -o - "${url}" | ffmpeg -i pipe:0 -analyzeduration 0 -loglevel 0 -acodec libopus -f ogg -ar 48000 -ac 2 pipe:1`;
 
       const process = spawn(cmd, [], {
@@ -91,32 +109,36 @@ class MusicQueue {
 
       this.currentProcess = process;
 
-      let hasError = false;
-
       process.on('error', (err) => {
-        console.error('Stream process error:', err.message);
+        console.error('[Music] Process error:', err.message);
+      });
+
+      process.on('close', (code) => {
+        console.log(`[Music] Process exited with code: ${code}`);
       });
 
       process.stderr.on('data', (data) => {
         const msg = data.toString();
         if (msg.includes('ERROR') || msg.includes('not available')) {
-          console.error('Stream error:', msg);
-          if (!hasError) {
-            hasError = true;
-            if (this.textChannel) {
-              this.textChannel.send('❌ Video ini tidak bisa diputar. Skipping...').catch(() => {});
-            }
-            this.killProcess();
-            this.playNext();
+          console.error('[Music] Stream error:', msg);
+          if (this.textChannel) {
+            this.textChannel.send('❌ Video tidak bisa diputar. Skipping...').catch(() => {});
           }
+          this.killProcess();
+          this.playNext();
         }
       });
+
+      // Wait a tiny bit for data to start flowing
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       const resource = createAudioResource(process.stdout, {
         inputType: StreamType.OggOpus,
       });
 
+      console.log('[Music] Resource created, playing...');
       this.player.play(resource);
+      console.log(`[Music] Player state: ${this.player.state.status}`);
 
       if (this.textChannel) {
         const embed = new EmbedBuilder()
@@ -142,7 +164,7 @@ class MusicQueue {
         this.textChannel.send({ embeds: [embed], components: [row] }).catch(() => {});
       }
     } catch (error) {
-      console.error('Error playing song:', error.message || error);
+      console.error('[Music] Error:', error.message || error);
       if (this.textChannel) {
         this.textChannel.send('❌ Error memutar lagu, skip ke berikutnya...').catch(() => {});
       }
