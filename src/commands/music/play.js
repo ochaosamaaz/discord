@@ -1,10 +1,11 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getQueue } = require('../../systems/music');
+const { execSync } = require('child_process');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Putar lagu dari YouTube/Spotify')
+    .setDescription('Putar lagu dari YouTube')
     .addStringOption(opt =>
       opt.setName('query').setDescription('URL atau nama lagu').setRequired(true)
     ),
@@ -21,46 +22,34 @@ module.exports = {
     const queue = getQueue(client, interaction.guild.id);
 
     try {
-      const play = require('play-dl');
-
-      let songInfo;
       let songs = [];
 
       // Check if it's a URL or search query
-      if (play.yt_validate(query) === 'video') {
-        const info = await play.video_info(query);
-        songs.push({
-          title: info.video_details.title,
-          url: info.video_details.url,
-          duration: info.video_details.durationRaw,
-          thumbnail: info.video_details.thumbnails[0]?.url,
-          requestedBy: interaction.user,
-        });
-      } else if (play.yt_validate(query) === 'playlist') {
-        const playlist = await play.playlist_info(query, { incomplete: true });
-        const videos = await playlist.all_videos();
-        for (const video of videos.slice(0, 50)) {
+      const isUrl = query.startsWith('http://') || query.startsWith('https://');
+      let searchQuery = isUrl ? query : `ytsearch:${query}`;
+
+      // Use yt-dlp to get song info
+      const result = execSync(
+        `yt-dlp --no-playlist --print "%(title)s|||%(webpage_url)s|||%(duration_string)s|||%(thumbnail)s" "${searchQuery}"`,
+        { encoding: 'utf-8', timeout: 15000 }
+      ).trim();
+
+      const lines = result.split('\n');
+      for (const line of lines.slice(0, 1)) { // Only take first result
+        const [title, url, duration, thumbnail] = line.split('|||');
+        if (title && url) {
           songs.push({
-            title: video.title,
-            url: video.url,
-            duration: video.durationRaw,
-            thumbnail: video.thumbnails[0]?.url,
+            title: title.trim(),
+            url: url.trim(),
+            duration: duration?.trim() || 'Unknown',
+            thumbnail: thumbnail?.trim() || null,
             requestedBy: interaction.user,
           });
         }
-      } else {
-        // Search YouTube
-        const searched = await play.search(query, { limit: 1 });
-        if (searched.length === 0) {
-          return interaction.editReply('❌ Lagu tidak ditemukan!');
-        }
-        songs.push({
-          title: searched[0].title,
-          url: searched[0].url,
-          duration: searched[0].durationRaw,
-          thumbnail: searched[0].thumbnails[0]?.url,
-          requestedBy: interaction.user,
-        });
+      }
+
+      if (songs.length === 0) {
+        return interaction.editReply('❌ Lagu tidak ditemukan!');
       }
 
       // Connect if not connected
@@ -73,31 +62,21 @@ module.exports = {
         queue.addSong(song);
       }
 
-      if (songs.length === 1) {
-        const embed = new EmbedBuilder()
-          .setTitle('🎵 Added to Queue')
-          .setDescription(`**[${songs[0].title}](${songs[0].url})**`)
-          .addFields(
-            { name: '⏱️ Duration', value: songs[0].duration || 'Unknown', inline: true },
-            { name: '📋 Position', value: `#${queue.songs.length}`, inline: true },
-          )
-          .setThumbnail(songs[0].thumbnail || null)
-          .setColor(0x1db954)
-          .setFooter({ text: `Requested by ${interaction.user.username}` });
+      const embed = new EmbedBuilder()
+        .setTitle('🎵 Added to Queue')
+        .setDescription(`**[${songs[0].title}](${songs[0].url})**`)
+        .addFields(
+          { name: '⏱️ Duration', value: songs[0].duration || 'Unknown', inline: true },
+          { name: '📋 Position', value: `#${queue.songs.length}`, inline: true },
+        )
+        .setThumbnail(songs[0].thumbnail || null)
+        .setColor(0x1db954)
+        .setFooter({ text: `Requested by ${interaction.user.username}` });
 
-        await interaction.editReply({ embeds: [embed] });
-      } else {
-        const embed = new EmbedBuilder()
-          .setTitle('🎵 Playlist Added to Queue')
-          .setDescription(`**${songs.length} lagu** ditambahkan ke queue!`)
-          .setColor(0x1db954)
-          .setFooter({ text: `Requested by ${interaction.user.username}` });
-
-        await interaction.editReply({ embeds: [embed] });
-      }
+      await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error('Play command error:', error);
-      await interaction.editReply('❌ Gagal memutar lagu! Coba lagi nanti.');
+      await interaction.editReply('❌ Gagal memutar lagu! Pastikan yt-dlp & ffmpeg sudah terinstall.');
     }
   },
 };

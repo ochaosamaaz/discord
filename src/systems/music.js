@@ -31,6 +31,8 @@ class MusicQueue {
       channelId: voiceChannel.id,
       guildId: this.guildId,
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: false,
     });
 
     this.connection.subscribe(this.player);
@@ -75,9 +77,43 @@ class MusicQueue {
     this.current = this.songs.shift();
 
     try {
-      const play = require('play-dl');
-      const stream = await play.stream(this.current.url);
-      const resource = createAudioResource(stream.stream, { inputType: stream.type });
+      const { createAudioResource: makeResource, StreamType } = require('@discordjs/voice');
+      const { spawn } = require('child_process');
+
+      // Use yt-dlp for reliable YouTube streaming
+      const ytdlp = spawn('yt-dlp', [
+        '-f', 'bestaudio[ext=webm]/bestaudio',
+        '--no-playlist',
+        '-o', '-',
+        '--quiet',
+        this.current.url,
+      ]);
+
+      // Pipe through ffmpeg for proper audio format
+      const ffmpeg = spawn('ffmpeg', [
+        '-i', 'pipe:0',
+        '-analyzeduration', '0',
+        '-loglevel', '0',
+        '-f', 's16le',
+        '-ar', '48000',
+        '-ac', '2',
+        'pipe:1',
+      ]);
+
+      ytdlp.stdout.pipe(ffmpeg.stdin);
+
+      ytdlp.stderr.on('data', (data) => {
+        console.error('yt-dlp error:', data.toString());
+      });
+
+      ffmpeg.stderr.on('data', (data) => {
+        // Suppress ffmpeg logs
+      });
+
+      const resource = createAudioResource(ffmpeg.stdout, {
+        inputType: StreamType.Raw,
+      });
+
       this.player.play(resource);
 
       if (this.textChannel) {
