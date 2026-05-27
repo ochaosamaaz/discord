@@ -82,7 +82,7 @@ class MusicQueue {
     try {
       // Step 1: Get direct audio URL from yt-dlp
       const { stdout } = await execAsync(
-        `yt-dlp -f "bestaudio" --get-url --no-playlist "${this.current.url}"`,
+        `yt-dlp -f "bestaudio/best" --get-url --no-playlist "${this.current.url}"`,
         { timeout: 15000 }
       );
       const audioUrl = stdout.trim();
