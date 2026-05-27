@@ -80,9 +80,9 @@ class MusicQueue {
     this.current = this.songs.shift();
 
     try {
-      // Use yt-dlp piped to ffmpeg via shell (most reliable on Windows)
+      // Use yt-dlp piped to ffmpeg, output OGG/Opus (native Discord format - no encryption needed)
       const url = this.current.url;
-      const cmd = `yt-dlp -f "bestaudio/best" --no-playlist --no-live-from-start -o - "${url}" | ffmpeg -i pipe:0 -analyzeduration 0 -loglevel 0 -f s16le -ar 48000 -ac 2 pipe:1`;
+      const cmd = `yt-dlp -f "bestaudio/best" --no-playlist --no-live-from-start -o - "${url}" | ffmpeg -i pipe:0 -analyzeduration 0 -loglevel 0 -acodec libopus -f ogg -ar 48000 -ac 2 pipe:1`;
 
       const process = spawn(cmd, [], {
         shell: true,
@@ -104,7 +104,7 @@ class MusicQueue {
           if (!hasError) {
             hasError = true;
             if (this.textChannel) {
-              this.textChannel.send('❌ Video ini tidak bisa diputar (mungkin live stream/restricted). Skipping...').catch(() => {});
+              this.textChannel.send('❌ Video ini tidak bisa diputar. Skipping...').catch(() => {});
             }
             this.killProcess();
             this.playNext();
@@ -113,7 +113,7 @@ class MusicQueue {
       });
 
       const resource = createAudioResource(process.stdout, {
-        inputType: StreamType.Raw,
+        inputType: StreamType.OggOpus,
       });
 
       this.player.play(resource);
