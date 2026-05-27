@@ -42,6 +42,11 @@ class MusicQueue {
       channelId: voiceChannel.id,
       guildId: this.guildId,
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      debug: true,
+    });
+
+    this.connection.on('stateChange', (oldState, newState) => {
+      console.log(`[Music] Connection: ${oldState.status} -> ${newState.status}`);
     });
 
     // Check if already ready, otherwise wait
