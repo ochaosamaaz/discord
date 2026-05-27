@@ -27,7 +27,7 @@ class MusicQueue {
     });
 
     this.player.on(AudioPlayerStatus.Playing, () => {
-      console.log('[Music] Player is now PLAYING');
+      console.log('[Music] ✅ Player is now PLAYING');
     });
 
     this.player.on(AudioPlayerStatus.Buffering, () => {
@@ -44,17 +44,23 @@ class MusicQueue {
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
     });
 
-    // Wait for connection to be ready
-    try {
-      await entersState(this.connection, VoiceConnectionStatus.Ready, 10000);
-      console.log('[Music] Voice connection READY');
-    } catch (err) {
-      console.error('[Music] Voice connection failed:', err.message);
-      this.destroy();
-      throw new Error('Could not connect to voice channel');
+    // Check if already ready, otherwise wait
+    if (this.connection.state.status !== VoiceConnectionStatus.Ready) {
+      try {
+        await entersState(this.connection, VoiceConnectionStatus.Ready, 20000);
+      } catch (err) {
+        console.log('[Music] Wait for Ready timed out, checking current state:', this.connection.state.status);
+        // If it's at least signalling/connecting, try to continue anyway
+        if (this.connection.state.status === VoiceConnectionStatus.Destroyed) {
+          throw new Error('Connection destroyed');
+        }
+        // Otherwise, just continue - bot might already be connected
+      }
     }
 
+    console.log('[Music] Voice connection state:', this.connection.state.status);
     this.connection.subscribe(this.player);
+    console.log('[Music] Player subscribed to connection');
 
     this.connection.on(VoiceConnectionStatus.Disconnected, async () => {
       try {
@@ -97,7 +103,6 @@ class MusicQueue {
     try {
       const url = this.current.url;
       console.log(`[Music] Playing: ${this.current.title}`);
-      console.log(`[Music] URL: ${url}`);
 
       // yt-dlp output to stdout | ffmpeg encode to OGG Opus
       const cmd = `yt-dlp -f "bestaudio/best" --no-playlist --no-live-from-start -o - "${url}" | ffmpeg -i pipe:0 -analyzeduration 0 -loglevel 0 -acodec libopus -f ogg -ar 48000 -ac 2 pipe:1`;
@@ -129,8 +134,8 @@ class MusicQueue {
         }
       });
 
-      // Wait a tiny bit for data to start flowing
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Wait for data to start flowing
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       const resource = createAudioResource(process.stdout, {
         inputType: StreamType.OggOpus,
@@ -138,7 +143,14 @@ class MusicQueue {
 
       console.log('[Music] Resource created, playing...');
       this.player.play(resource);
-      console.log(`[Music] Player state: ${this.player.state.status}`);
+
+      // Log state after a moment
+      setTimeout(() => {
+        console.log(`[Music] Player state after 2s: ${this.player.state.status}`);
+        if (this.connection) {
+          console.log(`[Music] Connection state: ${this.connection.state.status}`);
+        }
+      }, 2000);
 
       if (this.textChannel) {
         const embed = new EmbedBuilder()
