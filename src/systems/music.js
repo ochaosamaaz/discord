@@ -1,5 +1,8 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, StreamType } = require('@discordjs/voice');
+const { spawn, exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 class MusicQueue {
   constructor(guildId) {
@@ -11,6 +14,7 @@ class MusicQueue {
     this.loop = false;
     this.volume = 100;
     this.textChannel = null;
+    this.currentProcess = null;
 
     this.player.on(AudioPlayerStatus.Idle, () => {
       if (this.loop && this.current) {
@@ -20,7 +24,7 @@ class MusicQueue {
     });
 
     this.player.on('error', (error) => {
-      console.error('Music player error:', error);
+      console.error('Music player error:', error.message);
       this.playNext();
     });
   }
@@ -65,7 +69,6 @@ class MusicQueue {
           .setColor(0xfee75c);
         this.textChannel.send({ embeds: [embed] }).catch(() => {});
       }
-      // Auto-disconnect after 2 minutes of no songs
       setTimeout(() => {
         if (!this.current && this.connection) {
           this.destroy();
@@ -77,44 +80,38 @@ class MusicQueue {
     this.current = this.songs.shift();
 
     try {
-      const { StreamType } = require('@discordjs/voice');
-      const { spawn } = require('child_process');
+      // Step 1: Get direct audio URL from yt-dlp
+      const { stdout } = await execAsync(
+        `yt-dlp -f "bestaudio" --get-url --no-playlist "${this.current.url}"`,
+        { timeout: 15000 }
+      );
+      const audioUrl = stdout.trim();
 
-      // Use yt-dlp for reliable YouTube streaming (shell: true for Windows compatibility)
-      const ytdlp = spawn('yt-dlp', [
-        '-f', 'bestaudio[ext=webm]/bestaudio',
-        '--no-playlist',
-        '-o', '-',
-        '--quiet',
-        this.current.url,
-      ], { shell: true });
+      if (!audioUrl) {
+        throw new Error('Could not get audio URL');
+      }
 
-      // Pipe through ffmpeg for proper audio format
+      // Step 2: Use ffmpeg to stream directly from the URL
       const ffmpeg = spawn('ffmpeg', [
-        '-i', 'pipe:0',
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', audioUrl,
         '-analyzeduration', '0',
         '-loglevel', '0',
         '-f', 's16le',
         '-ar', '48000',
         '-ac', '2',
         'pipe:1',
-      ], { shell: true });
+      ]);
 
-      ytdlp.stdout.pipe(ffmpeg.stdin);
-
-      ytdlp.stderr.on('data', (data) => {
-        // Only log real errors, not progress
-        const msg = data.toString();
-        if (msg.includes('ERROR')) console.error('yt-dlp error:', msg);
-      });
-
-      ytdlp.on('error', (err) => {
-        console.error('yt-dlp spawn error:', err);
-      });
+      this.currentProcess = ffmpeg;
 
       ffmpeg.on('error', (err) => {
-        console.error('ffmpeg spawn error:', err);
+        console.error('ffmpeg error:', err.message);
       });
+
+      ffmpeg.stdin.on('error', () => {});
 
       const resource = createAudioResource(ffmpeg.stdout, {
         inputType: StreamType.Raw,
@@ -146,9 +143,9 @@ class MusicQueue {
         this.textChannel.send({ embeds: [embed], components: [row] }).catch(() => {});
       }
     } catch (error) {
-      console.error('Error playing song:', error);
+      console.error('Error playing song:', error.message || error);
       if (this.textChannel) {
-        this.textChannel.send('❌ Error memutar lagu, skip ke lagu berikutnya...').catch(() => {});
+        this.textChannel.send('❌ Error memutar lagu, skip ke berikutnya...').catch(() => {});
       }
       this.playNext();
     }
@@ -163,18 +160,27 @@ class MusicQueue {
   }
 
   skip() {
+    this.killProcess();
     this.player.stop();
   }
 
   stop() {
     this.songs = [];
     this.current = null;
+    this.killProcess();
     this.player.stop();
   }
 
   toggleLoop() {
     this.loop = !this.loop;
     return this.loop;
+  }
+
+  killProcess() {
+    if (this.currentProcess) {
+      try { this.currentProcess.kill('SIGTERM'); } catch {}
+      this.currentProcess = null;
+    }
   }
 
   destroy() {
